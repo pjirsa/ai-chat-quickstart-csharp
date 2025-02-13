@@ -40,7 +40,7 @@ param openAiResourceGroupName string = ''
 })
 param openAiResourceLocation string
 param openAiSkuName string = ''
-param openAiApiVersion string = '' // Used by the SDK in the app code
+param openAiApiVersion string // Used by the SDK in the app code
 param disableKeyBasedAuth bool = true
 
 // Parameters for the specific Azure OpenAI deployment:
@@ -76,17 +76,16 @@ resource openAiResourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' exi
 
 var prefix = toLower('${name}-${resourceToken}')
 
-module openAi 'core/ai/cognitiveservices.bicep' = if (createAzureOpenAi) {
+module openAi 'br/public:avm/res/cognitive-services/account:0.9.2' = if (createAzureOpenAi) {
   name: 'openai'
   scope: openAiResourceGroup
   params: {
+    // Required parameters
+    kind: 'OpenAI'
     name: !empty(openAiResourceName) ? openAiResourceName : '${resourceToken}-cog'
-    location: !empty(openAiResourceLocation) ? openAiResourceLocation : location
-    tags: tags
     disableLocalAuth: disableKeyBasedAuth
-    sku: {
-      name: !empty(openAiSkuName) ? openAiSkuName : 'S0'
-    }
+    sku: !empty(openAiSkuName) ? openAiSkuName : 'S0'
+    customSubDomainName: !empty(openAiResourceName) ? openAiResourceName : '${resourceToken}-cog'
     deployments: [
       {
         name: openAiDeploymentName
@@ -101,10 +100,12 @@ module openAi 'core/ai/cognitiveservices.bicep' = if (createAzureOpenAi) {
         }
       }
     ]
+    location: location
+    publicNetworkAccess: 'Enabled'
   }
 }
 
-module logAnalyticsWorkspace 'core/monitor/loganalytics.bicep' = {
+module logAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.10.0' = {
   name: 'loganalytics'
   scope: resourceGroup
   params: {
@@ -115,16 +116,27 @@ module logAnalyticsWorkspace 'core/monitor/loganalytics.bicep' = {
 }
 
 // Container apps host (including container registry)
-module containerApps 'core/host/container-apps.bicep' = {
-  name: 'container-apps'
+module containerAppsEnvironment 'br/public:avm/res/app/managed-environment:0.9.0' = {
   scope: resourceGroup
+  name: 'app-container-apps-environment'
   params: {
-    name: 'app'
+    name: '${prefix}-containerapps-env'
     location: location
     tags: tags
-    containerAppsEnvironmentName: '${prefix}-containerapps-env'
-    containerRegistryName: '${replace(prefix, '-', '')}registry'
-    logAnalyticsWorkspaceName: logAnalyticsWorkspace.outputs.name
+    logAnalyticsWorkspaceResourceId: logAnalyticsWorkspace.outputs.resourceId
+    zoneRedundant: false
+  }
+}
+
+module containerRegistry 'br/public:avm/res/container-registry/registry:0.8.5' = {
+  scope: resourceGroup
+  name: 'app-container-registry'
+  params: {
+    name: '${replace(prefix, '-', '')}registry'
+    location: location
+    tags: tags
+    zoneRedundancy: 'Disabled'
+    exportPolicyStatus: 'enabled'
   }
 }
 
@@ -137,8 +149,8 @@ module aca 'app/aca.bicep' = {
     location: location
     tags: tags
     identityName: '${prefix}-id-aca'
-    containerAppsEnvironmentName: containerApps.outputs.environmentName
-    containerRegistryName: containerApps.outputs.registryName
+    containerAppsEnvironmentName: containerAppsEnvironment.outputs.name
+    containerRegistryName: containerRegistry.outputs.name
     openAiDeploymentName: openAiDeploymentName
     openAiEndpoint: createAzureOpenAi ? openAi.outputs.endpoint : openAiEndpoint
     openAiApiVersion: openAiApiVersion
@@ -180,6 +192,6 @@ output SERVICE_ACA_NAME string = aca.outputs.SERVICE_ACA_NAME
 output SERVICE_ACA_URI string = aca.outputs.SERVICE_ACA_URI
 output SERVICE_ACA_IMAGE_NAME string = aca.outputs.SERVICE_ACA_IMAGE_NAME
 
-output AZURE_CONTAINER_ENVIRONMENT_NAME string = containerApps.outputs.environmentName
-output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerApps.outputs.registryLoginServer
-output AZURE_CONTAINER_REGISTRY_NAME string = containerApps.outputs.registryName
+output AZURE_CONTAINER_ENVIRONMENT_NAME string = containerAppsEnvironment.outputs.name
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerRegistry.outputs.loginServer
+output AZURE_CONTAINER_REGISTRY_NAME string = containerRegistry.outputs.name
